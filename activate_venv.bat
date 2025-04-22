@@ -1,1 +1,0 @@
-source madnis/.venv/bin/activate
