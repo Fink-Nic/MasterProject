@@ -16,8 +16,19 @@ import numpy as np
 
 from datetime import datetime
 from enum import StrEnum
+from triangle import ltd_triangle, prop_factor
 
 
+# Integrand functions
+def const_f(m_psi: float, k: list[float], q: list[float], p: list[float], weight: float) -> float:
+    return prop_factor(m_psi, k, q, p, weight)
+
+
+def triangle_f(m_psi: float, k: list[float], q: list[float], p: list[float], weight: float) -> float:
+    return prop_factor(m_psi, k, q, p, weight)*ltd_triangle(m_psi, k, q, p)
+
+
+# Logging related setup
 class Colour(StrEnum):
     PURPLE = '\033[95m'
     CYAN = '\033[96m'
@@ -271,13 +282,13 @@ class TropicalIntegrator:
         self.optimizer.step()
         return loss.item()
 
-    def train(self, iterations: int, log_interval=100):
+    def train(self, iterations: int, n_log=100, **opts):
         loss = 0.
         for i in range(iterations):
             samples = self.sample(self.batch_size)
             loss += self.optimization_step(samples)
-            if (i + 1) % log_interval == 0:
-                print(f"Batch {i+1}: loss={loss / log_interval:.6f}")
+            if (i + 1) % n_log == 0:
+                print(f"Batch {i+1}: loss={loss / n_log:.6f}")
                 loss = 0.
 
     def integrate(self, n: int) -> tuple[float, float]:
@@ -287,7 +298,7 @@ class TropicalIntegrator:
         error = weights.std().item() / math.sqrt(n)
         return integral, error
 
-    def plot(self, args):
+    def plot(self, **opts):
         pass
 
 
@@ -295,30 +306,35 @@ class TIChannels(TropicalIntegrator):
     probs = []
     losses = []
 
-    def train(self, iterations: int, log_interval=100):
+    def train(self, iterations: int, n_log=50, **opts):
         loss = 0.
+        loss_prog = 0.
         self.probs.append(self.peek_discrete_channels().numpy())
         for i in range(iterations):
             samples = self.sample(self.batch_size)
-            loss += self.optimization_step(samples)
-            if (i + 1) % log_interval == 0:
-                logger.info(f"Batch {i+1}: loss={loss / log_interval:.6f}")
+            it_loss = self.optimization_step(samples)
+            loss += it_loss
+            loss_prog += it_loss
+            if (i + 1) % opts['plotting_interval'] == 0:
                 self.probs.append(self.peek_discrete_channels().numpy())
-                self.losses.append(loss/log_interval)
+                self.losses.append(loss_prog/opts['plotting_interval'])
+                loss_prog = 0.
+            if (i + 1) % n_log == 0:
+                logger.info(f"Batch {i+1}: loss={loss / n_log:.6f}")
                 loss = 0.
 
-    def plot(self, args):
+    def plot(self, **opts):
         legend_loc = 'upper right'
         probs = np.array(self.probs)
         losses = np.array(self.losses)
         loss_scaling = np.max(probs)/np.max(losses)
         losses *= loss_scaling
         log_iters = np.arange(start=0,
-                              stop=args.n_iterations+1, step=args.log_interval)
+                              stop=opts['n_iterations']+1, step=opts['plotting_interval'])
         plt.style.use('ggplot')
         fig, axs = plt.subplots(2, 2, sharex=True, sharey=True)
         fig.suptitle(
-            f'Channel Probability Evolution using {args.batch_size} samples')
+            f'Channel Probability Evolution using {opts['batch_size']} samples')
         channel_sigs = ['12', '13', '21', '23', '31', '32']
         for ch in range(3):
             channel = probs[:, 2*ch] + probs[:, 2*ch+1]
@@ -339,10 +355,10 @@ class TIChannels(TropicalIntegrator):
         axs[1, 1].set_title('Summary')
 
         plt.ylim([0, np.ceil(np.max(probs)*20)/10])
-        if not args.nosave_fig:
+        if not opts['nosave_fig']:
             filename = 'channel_probs_evolution_' + \
                 datetime.now().strftime('%Y_%m_%d-%H_%M_%S')+'.png'
-            plt.savefig(os.path.join(os.getcwd(), args.file_path,
+            plt.savefig(os.path.join(os.getcwd(), opts['file_path'],
                         filename), dpi=300, bbox_inches='tight')
         plt.show()
 
@@ -383,12 +399,15 @@ class TIChannels(TropicalIntegrator):
 
 
 class TI1DSlice(TropicalIntegrator):
-    def plot(self, args):
+    def plot(self, **opts):
         force_z = torch.rand(self.integrand.continuous_dim)
-        force_z = force_z.repeat((args.n_samples, 1))
-        slice_dim = torch.randint(
-            size=(1,), high=self.integrand.continuous_dim).item()
-        slice_grid = torch.linspace(0, 1, args.n_samples)
+        force_z = force_z.repeat((opts['n_samples'], 1))
+        if opts['slice_dim'] is None:
+            slice_dim = torch.randint(
+                size=(1,), high=self.integrand.continuous_dim).item()
+        else:
+            slice_dim = opts['slice_dim']
+        slice_grid = torch.linspace(0, 1, opts['n_samples'])
         force_z[:, slice_dim] = slice_grid
         slice_grid = slice_grid.numpy()
 
@@ -398,7 +417,7 @@ class TI1DSlice(TropicalIntegrator):
         integrals = []
         for channel in channels:
             slice_samples = self.sample_1dslice(
-                args.n_samples, channel, force_z)
+                opts['n_samples'], channel, force_z)
             slice_weights = slice_samples.func_val / slice_samples.prob
             slice_integral = slice_weights.mean().item()
             integrals.append(slice_integral*slice_samples.discrete_probs[0])
@@ -416,10 +435,10 @@ class TI1DSlice(TropicalIntegrator):
         ax.set_xlabel("Sliced dimension z-value")
         ax.set_ylabel("Function value")
         ax.legend()
-        if not args.nosave_fig:
+        if not opts['nosave_fig']:
             filename = 'latent_space_slicing_' + \
                 datetime.now().strftime('%Y_%m_%d-%H_%M_%S')+'.png'
-            plt.savefig(os.path.join(os.getcwd(), args.file_path,
+            plt.savefig(os.path.join(os.getcwd(), opts['file_path'],
                         filename), dpi=300, bbox_inches='tight')
         plt.show()
 
@@ -461,27 +480,42 @@ class TI1DSlice(TropicalIntegrator):
     def sample_continuous_1dslice(self, cache: Cache, force_z) -> tuple[torch.Tensor, torch.Tensor]:
         x, prob, net_cache = cache
         condition = torch.cat((net_cache[0], x), dim=1)
-        flow_samples, flow_log_prob = self.flow.flow.sample(
-            c=condition, return_log_prob=True, force_z=force_z)
+        flow_samples, jac = self.flow.flow.transform(
+            x=force_z, inverse=True, c=condition)
+        log_prob_latent = self.flow.flow._latent_log_prob(force_z)
+        flow_log_prob = log_prob_latent - jac
         return flow_samples, prob.log() + flow_log_prob
 
 
-class TriangleIntegrand:
+class TriangleIntegrand(object):
     continuous_dim = 7
     discrete_dims = [3, 3]
+    mt_weight = 0.7
 
-    def __init__(self):
-        edge_1 = momtrop.Edge((0, 1), False, 0.66)
-        edge_2 = momtrop.Edge((1, 2), False, 0.77)
-        edge_3 = momtrop.Edge((2, 0), False, 0.88)
+    def __init__(self, m_psi: float = 0.02, p: list[float] = [0.005, 0., 0., 0.005], q: list[float] = [0.005, 0., 0., -0.005],
+                 integrand=triangle_f, weight: float = 0.5):
+        isMassive = m_psi > 1e-10
+        self.m_psi = m_psi
+        self.p = p
+        self.q = q
+        self.weight = weight
+        self.integrand = integrand
+        edge_1 = momtrop.Edge((0, 1), isMassive, self.mt_weight)
+        edge_2 = momtrop.Edge((1, 2), isMassive, self.mt_weight)
+        edge_3 = momtrop.Edge((2, 0), isMassive, self.mt_weight)
 
         assym_graph = momtrop.Graph([edge_1, edge_2, edge_3], [0, 1, 2])
         signature = [[1], [1], [1]]
 
         self.sampler = momtrop.Sampler(assym_graph, signature)
-        self.edge_data = momtrop.EdgeData([0.0, 0.0, 0.0], [momtrop.Vector(
-            0.0, 0.0, 0.0), momtrop.Vector(3., 4., 5.), momtrop.Vector(9., 11., 13.)])
+        self.edge_data = momtrop.EdgeData(
+            [m_psi, m_psi, m_psi],
+            [momtrop.Vector(0., 0., 0.),
+             momtrop.Vector(-q[1], -q[2], -q[3]),
+             momtrop.Vector(p[1], p[2], p[3])
+             ])
         self.settings = momtrop.Settings(False, False)
+        self.continuous_dim = self.sampler.get_dimension()
 
     def predict_discrete_probs(self, dim: int, indices: torch.Tensor) -> torch.Tensor:
         rust_result = self.sampler.predict_discrete_probs(indices.tolist())
@@ -497,11 +531,28 @@ class TriangleIntegrand:
 
         return result
 
-    def __call__(self, indices: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        rust_result = self.sampler.call(
-            indices.tolist(), x.tolist(), self.edge_data, self.settings)
+    def momtrop_parameterize(self, xs: list[float], force_sector: list[float] | None = None) -> tuple[list[float], float]:
+        sample = self.sampler.sample_point(
+            xs, self.edge_data, self.settings, force_sector)
+        k = [sample.loop_momenta[0].x(),
+             sample.loop_momenta[0].y(),
+             sample.loop_momenta[0].z()]
+        # Our LTD expression has a factor of 2 for each propagator
+        const_factor = 1./8.
 
-        return torch.tensor(rust_result)
+        return k, sample.jacobian/const_factor
+
+    def integrate_point(self, xs: list[float], indices: list[float] | None = None) -> float:
+        force_sector = indices + self.get_subgraph_from_edges_removed(indices)
+        k, jac = self.momtrop_parameterize(xs, force_sector)
+        jac *= self.sampler.get_sector_prob(force_sector)
+
+        return self.integrand(self.m_psi, k, self.q, self.p, self.weight-self.mt_weight)*jac
+
+    def __call__(self, indices: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        result = list(map(self.integrate_point, x.tolist(), indices.tolist()))
+
+        return torch.tensor(result)
 
 
 def integrate_flat(integrand, n):
@@ -520,6 +571,8 @@ def main():
     # create the top-level parser
     parser = argparse.ArgumentParser(prog='mtm')
 
+    parser.add_argument('--command', '-c', type=str, choices=[
+                        'channel_prog', '1dslice', 'integrate'], default='integrate', help='Perform an implemented command.')
     parser.add_argument('--n_samples', '-ns', type=int, default=10000,
                         help='Set number of samples taken from trained model')
     parser.add_argument('--n_iterations', '-ni', type=int, default=1000,
@@ -532,10 +585,29 @@ def main():
                         'debug', 'info', 'critical'], default='info', help='Set verbosity level')
     parser.add_argument('--nosave_fig', action='store_true', default=False,
                         help='Enable to only show plotted figure')
-    parser.add_argument('--plot', '-p', type=str, choices=[
-                        'channel_prog', '1dslice', 'None'], default='None', help='Perform an implemented examination and plot the result')
     parser.add_argument('--file_path', '-fp', type=str, default='',
                         help='Specify a relative path to a folder to save the plot at.')
+
+    subparser = parser.add_subparsers(
+        title="commands", dest="command", help='Various commands available')
+
+    # integrate subparser
+    parser_integrate = subparser.add_parser(
+        'integrate', help='Integrate the integrand.'
+    )
+
+    # channel_prog subparser
+    parser_channel_prog = subparser.add_parser(
+        'channel_prog', help='Inspect the evolution of the discrete probabilities for each channel.'
+    )
+    parser_channel_prog.add_argument('--plotting_interval', '-pi', type=int,
+                                     default=100, help='Over-ride the log_interval for the channel_prog plot.')
+
+    # 1dslice subparser
+    parser_1dslice = subparser.add_parser(
+        '1dslice', help='Inspect the latent space along a one-dimensional slice.')
+    parser_1dslice.add_argument('--slice_dim', '-sd', type=int, default=2,
+                                help='Optional: specify the dimension along which to slice for the 1dslice analysis.')
 
     args = parser.parse_args()
 
@@ -552,20 +624,20 @@ def main():
 
     torch.set_default_dtype(torch.float64)
     integrand = TriangleIntegrand()
-    match args.plot:
-        case 'None': integrator = TropicalIntegrator(integrand, batch_size=args.batch_size)
+    match args.command:
+        case 'integrate': integrator = TropicalIntegrator(integrand, batch_size=args.batch_size)
         case 'channel_prog': integrator = TIChannels(integrand, batch_size=args.batch_size)
         case '1dslice': integrator = TI1DSlice(integrand, batch_size=args.batch_size)
 
     logger.info("Running_training")
-    integrator.train(args.n_iterations, args.log_interval)
+    integrator.train(args.n_iterations, args.log_interval, **vars(args))
     logger.info("Training done \n")
 
     int_flow, err_flow = integrator.integrate(args.n_samples)
     rsd_flow = err_flow / int_flow * math.sqrt(args.n_samples)
     logger.info(f"Trained flow:     {
         int_flow:.8f} +- {err_flow:.8f}, RSD = {rsd_flow:.2f}")
-    integrator.plot(args)
+    integrator.plot(**vars(args))
 
 
 if __name__ == "__main__":

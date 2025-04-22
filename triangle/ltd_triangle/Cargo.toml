@@ -1,0 +1,14 @@
+[package]
+name = "triangle"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "triangle"
+crate-type = ["cdylib"]
+
+[build-dependencies]
+pyo3-build-config = "0.20.0"
+
+[dependencies]
+pyo3 = { version = "0.20.0", features = ["extension-module"] }
