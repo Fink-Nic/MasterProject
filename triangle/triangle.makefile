@@ -1,5 +1,3 @@
-all: Ex2.1 Ex2.2 Ex2.3 Ex2.4 Ex2.5 Ex2.6 Ex2.7 Ex2.8 Ex2.9 Ex2.10 Ex2.11 Ex2.13# List here all examples you completed
-
 Ex2.1:
 	@echo "Exercise 2.1"	
 	python3 ./triangler.py
@@ -91,8 +89,8 @@ Ex2.13v:
 	python3 triangler.py --alpha 1.5 -mc True -param spherical --m_s 1. --m_psi 0. -p 0. 0. 0. 5. -q 1. 4. 3. 2. integrate -n 10 -ppi 10000 -it vegas -nc 1 -s 1337
 
 MOMTROP_TEST:
-	@echo "Surely nothing will go wrong on the first attempt"
-	python3 ./triangler.py -param momtrop integrate -n 10 -ppi 100000 -it naive -s 1337
+	@echo "Testing the triangle implementation of the momtrop sampler"
+	python3 ./triangler.py -param momtrop integrate -n 10 -ppi 10000 -it naive -s 1337
 
 COMPARE:
 	@echo "Compare all the implemented samplers for the massive/massless triangle/f=1 integrand"
